@@ -9,8 +9,6 @@ name = "subscription-manager"
 [env.staging]
 name = "subscription-manager-staging"
 
-# KV 命名空间配置（默认模板不预设固定 ID，运行 npm run setup 自动生成）
-
 # 静态资源：托管 public/ 目录下的 JS/CSS/HTML 给浏览器
 # 使用方式：浏览器访问 /js/lib/api-client.js 等同于 public/js/lib/api-client.js
 # 不命中静态资源的请求由 Worker fetch handler 处理（默认行为）
@@ -18,9 +16,21 @@ name = "subscription-manager-staging"
 directory = "./public"
 binding = "ASSETS"
 
-# 定时任务配置 - 每小时检查一次（UTC）
-[triggers]
-crons = ["0 * * * *"]
+# KV 命名空间配置（自动生成）
+[[kv_namespaces]]
+binding = "SUBSCRIPTIONS_KV"
+id = "a9c83d5acb784e64a4c7555becda3a92"
+preview_id = "356bf2f7af5a4a228abf4b4b6b48a7e6"
+
+# 定时任务：Free 方案每个帐号最多 5 个 Cron Trigger，本帐号已用满（error 10072），
+# 因此不挂 cron，改由 Durable Object alarm 自调度（见 src/services/scheduler-alarm.js）。
+[[durable_objects.bindings]]
+name = "SCHEDULER"
+class_name = "SchedulerAlarm"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SchedulerAlarm"]
 
 # 环境变量（可选，也可以在 Cloudflare Dashboard 中设置）
 [vars]
