@@ -16,15 +16,20 @@ import {
   getRecentPayments,
   getUpcomingRenewals,
   getExpenseByType,
-  getExpenseByCategory
+  getExpenseByCategory,
+  DISPLAY_CURRENCIES
 } from '../../core/currency.js';
 import { getCurrentTimeInTimezone, MS_PER_DAY } from '../../core/time.js';
 import * as schedulerLogsRepo from '../../data/scheduler-logs.repo.js';
 
-async function handleDashboardStats(env, config) {
+async function handleDashboardStats(env, config, url) {
   try {
     const subscriptions = await getAllSubscriptions(env);
     const timezone = (config && config.TIMEZONE) || 'UTC';
+
+    /** 統計幣別：?currency=CNY|TWD|USD，未指定或非法時回退 CNY */
+    const requestedCurrency = String((url && url.searchParams.get('currency')) || 'CNY').toUpperCase();
+    const displayCurrency = DISPLAY_CURRENCIES.includes(requestedCurrency) ? requestedCurrency : 'CNY';
 
     /** 本次：從結構化日誌庫讀最新排程狀態 */
     let schedulerStatus = null;
@@ -57,12 +62,12 @@ async function handleDashboardStats(env, config) {
     }
 
     const rates = await getDynamicRates(env);
-    const monthlyExpense = calculateMonthlyExpense(subscriptions, timezone, rates);
-    const yearlyExpense = calculateYearlyExpense(subscriptions, timezone, rates);
+    const monthlyExpense = calculateMonthlyExpense(subscriptions, timezone, rates, displayCurrency);
+    const yearlyExpense = calculateYearlyExpense(subscriptions, timezone, rates, displayCurrency);
     const recentPayments = getRecentPayments(subscriptions, timezone);
     const upcomingRenewals = getUpcomingRenewals(subscriptions, timezone);
-    const expenseByType = getExpenseByType(subscriptions, timezone, rates);
-    const expenseByCategory = getExpenseByCategory(subscriptions, timezone, rates);
+    const expenseByType = getExpenseByType(subscriptions, timezone, rates, displayCurrency);
+    const expenseByCategory = getExpenseByCategory(subscriptions, timezone, rates, displayCurrency);
 
     const activeSubscriptions = subscriptions.filter((s) => s.isActive);
     const now = getCurrentTimeInTimezone(timezone);
@@ -90,7 +95,9 @@ async function handleDashboardStats(env, config) {
           schedulerStatus,
           schedulerStatusHistory,
           /** 新增：使用者時區（前端可據此顯示） */
-          timezone
+          timezone,
+          /** 新增：本次統計使用的幣別 */
+          currency: displayCurrency
         }
       }),
       { headers: { 'Content-Type': 'application/json' } }

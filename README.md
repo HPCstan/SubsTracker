@@ -9,8 +9,8 @@
 
 ## 🧩 本機改動紀錄
 
-> 本 fork 相對上游做過三組改動（2026-11）：**排程改用 Durable Object alarm**、**介面簡體轉繁體（台灣用語）**、**預設時區改為 `Asia/Taipei`**。
-> 線上部署：`https://subscription-manager.ogeypt.workers.dev`（Cloudflare Workers Free 方案，Worker 名稱 `subscription-manager`，目前版本 `a6690f4e`）。
+> 本 fork 相對上游做過四組改動（2026-11）：**排程改用 Durable Object alarm**、**介面簡體轉繁體（台灣用語）**、**預設時區改為 `Asia/Taipei`**、**資料概覽可切換統計幣別（CNY / TWD / USD）**。
+> 線上部署：`https://subscription-manager.ogeypt.workers.dev`（Cloudflare Workers Free 方案，Worker 名稱 `subscription-manager`，目前版本 `889c8203`）。
 
 ### 1. 排程改用 Durable Object alarm（取代 Cron Trigger）
 
@@ -53,12 +53,37 @@
 ### 4. 驗證紀錄
 
 - `npm run lint`（`tsc --noEmit -p jsconfig.json`）：通過，無錯誤。
-- `npm test`：**23 個測試檔 / 250 個測試全數通過**。
+- `npm test`：**24 個測試檔 / 262 個測試全數通過**。
   - ⚠️ 若專案路徑含空白（例如 `D:\ag\...\github install\SubsTracker`），`@cloudflare/vitest-pool-workers` 會解析出錯誤的模組路徑（`No such module ".../file:/..."`），導致 0 個測試被收集、23 個 error。此為環境問題，與程式碼無關；把專案複製到**無空白路徑**再執行 `npm test` 即可正常跑完。
 - 線上實測（登入後逐頁抓取 HTML）：`/login`、`/admin`、`/admin/dashboard`、`/admin/notify-logs`、`/admin/config`、`/debug` 皆為繁體，且無簡體字殘留。
 - Durable Object alarm 實跑：`sched_log` 每小時一筆，`timezone` 已為 `Asia/Taipei`。
 
-### 5. 注意事項
+### 5. 資料概覽可切換統計幣別（CNY / TWD / USD）
+
+**需求**：首頁「資料概覽」原本一律以人民幣（CNY）總結，需可切換新台幣（TWD）與美金（USD）。
+
+**先修掉一個潛伏的匯率錯誤**：`FALLBACK_RATES` 舊值是「1 外幣 = X CNY」（USD 6.98、TWD 0.22），但程式用 `amount / rate`，而匯率 API（`base=CNY`）回傳的是「1 CNY = X 外幣」，方向相反。且 `frankfurter` 的 `base=CNY` **不含 TWD**，TWD 一直落到兜底值 0.22 → NT$50 被算成 227 CNY（約 20 倍膨脹），畫面才會出現 `¥19083.09` 這種數字。
+
+| 檔案 | 改動 |
+|---|---|
+| `src/core/currency.js` | ① `FALLBACK_RATES` 改為「1 CNY = X 外幣」（USD 0.14、TWD 4.50、HKD 1.09、JPY 20.5、EUR 0.13、GBP 0.11、KRW 190、TRY 4.60）。② 新增 `DISPLAY_CURRENCIES = ['CNY','TWD','USD']`。③ 新增 `RATE_SOURCES`：`open.er-api.com/v6/latest/CNY`（166 幣，含 TWD）優先、`api.frankfurter.dev/v1/latest?base=CNY`（29 幣，無 TWD）備援；`getDynamicRates()` 逐來源嘗試並**優先採用含 TWD 的來源**，快取 key 升為 `SYSTEM_EXCHANGE_RATES_V2`（舊快取方向錯誤，不再沿用）。④ 新增 `convertCurrency(amount, from, to, rates)` = `(amount / rates[from]) * rates[to]`。⑤ `calculateMonthlyExpense` / `calculateYearlyExpense` / `getExpenseByType` / `getExpenseByCategory` 增加 `targetCurrency = 'CNY'` 參數，回傳前換算（百分比仍以 CNY 佔比計算，不受影響）。 |
+| `src/api/handlers/dashboard.js` | `handleDashboardStats(env, config, url)` 讀 `?currency=`，用 `DISPLAY_CURRENCIES` 驗證（非法值回退 `CNY`），傳入四個聚合函式，回應新增 `data.currency`。 |
+| `src/api/router.js` | `/dashboard/stats` 將 `url` 傳入 handler。 |
+| `src/views/dashboardPage.html` | 「資料概覽」列新增 `#displayCurrency` 下拉（人民幣／新台幣／美金），選擇存 `localStorage['dashboardDisplayCurrency']`；`loadDashboardData()` 改打 `/api/dashboard/stats?currency=...`；副標、兩張統計卡的幣別文字與 `¥` 符號、兩個排行徽章（`#expenseTypeBadge` / `#expenseCategoryBadge`）、排行金額全部改為動態（沿用既有 `getSymbol()`）。 |
+| `tests/core/currency-display.test.js`（新增） | 12 個測試：`convertCurrency` 同幣別／TWD→CNY／CNY→USD／往返不失真／0 與負數、`FALLBACK_RATES` 方向（並斷言 NT$50 不會被放大）、四個聚合函式的 `targetCurrency` 行為。既有 `convertToCNY` 語義未動（`auth-currency.test.js` 仍通過）。 |
+
+**驗證**（線上實測，`/api/dashboard/stats`）：
+
+| 請求 | 回傳 `currency` | 月度支出 | 年度支出 |
+|---|---|---|---|
+| `?currency=CNY`（或省略） | `CNY` | 941.51 | 1,319.45 |
+| `?currency=TWD` | `TWD` | 4,642.55 | 6,506.17 |
+| `?currency=USD` | `USD` | 140.98 | 197.57 |
+| `?currency=XXX` | `CNY`（回退） | 941.51 | 1,319.45 |
+
+CNY→TWD 約 4.93、CNY→USD 約 0.1497，與即時匯率一致；`/admin/dashboard` HTML 已含下拉與動態符號模板，無硬編 `¥` 金額。部署版本 `889c8203-a499-4d4a-add5-4d574f7543b4`。
+
+### 6. 注意事項
 
 - 改動**之前**產生的 `sched_log` 與通知紀錄仍寫著 `Asia/Shanghai`，屬歷史資料，不影響後續執行。
 - 本 fork 與上游 `wangwangit/SubsTracker` 已大幅分歧（`src/views/**`、`tests/**` 幾乎全改），直接 `git pull` 會產生大量衝突。

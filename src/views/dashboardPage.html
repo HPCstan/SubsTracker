@@ -131,7 +131,7 @@
   <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
     <div class="mb-6">
       <h2 class="text-2xl font-bold text-gray-800">📊 儀錶板</h2>
-      <p class="text-sm text-gray-500 mt-1">訂閱費用和活動概覽（統計金額已摺合為 CNY）</p>
+      <p id="statsSubtitle" class="text-sm text-gray-500 mt-1">訂閱費用和活動概覽（統計金額以 CNY 計）</p>
     </div>
 
     <div class="bg-white rounded-lg shadow-md overflow-hidden mb-6">
@@ -149,9 +149,18 @@
 
     <div class="flex items-center justify-between mb-4">
       <h2 class="text-lg font-medium text-gray-900"><i class="fas fa-chart-pie text-indigo-500 mr-2"></i>資料概覽</h2>
-      <button id="refreshBtn" onclick="manualRefresh()" class="text-sm text-indigo-600 hover:text-indigo-800 px-3 py-1 rounded hover:bg-indigo-50 transition">
-        <i class="fas fa-sync-alt mr-1"></i>重新整理
-      </button>
+      <div class="flex items-center gap-3">
+        <label for="displayCurrency" class="text-sm text-gray-500">統計幣別</label>
+        <select id="displayCurrency" onchange="changeDisplayCurrency(this.value)"
+          class="text-sm border border-gray-300 rounded-md px-2 py-1 bg-white text-gray-700 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
+          <option value="CNY">人民幣 (CNY)</option>
+          <option value="TWD">新台幣 (TWD)</option>
+          <option value="USD">美金 (USD)</option>
+        </select>
+        <button id="refreshBtn" onclick="manualRefresh()" class="text-sm text-indigo-600 hover:text-indigo-800 px-3 py-1 rounded hover:bg-indigo-50 transition">
+          <i class="fas fa-sync-alt mr-1"></i>重新整理
+        </button>
+      </div>
     </div>
 
     <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6" id="statsGrid">
@@ -205,7 +214,7 @@
             <i class="fas fa-chart-bar text-purple-500"></i>
             <h3 class="text-lg font-medium text-gray-900">按型別支出排行</h3>
           </div>
-          <span class="px-3 py-1 bg-indigo-100 text-indigo-800 text-xs font-medium rounded-full">年度統計 (摺合CNY)</span>
+          <span id="expenseTypeBadge" class="px-3 py-1 bg-indigo-100 text-indigo-800 text-xs font-medium rounded-full">年度統計 (摺合CNY)</span>
         </div>
         <div class="p-6" id="expenseByType">
           <div class="loading-skeleton"></div>
@@ -218,7 +227,7 @@
             <i class="fas fa-folder text-green-500"></i>
             <h3 class="text-lg font-medium text-gray-900">按分類支出統計</h3>
           </div>
-          <span class="px-3 py-1 bg-indigo-100 text-indigo-800 text-xs font-medium rounded-full">年度統計 (摺合CNY)</span>
+          <span id="expenseCategoryBadge" class="px-3 py-1 bg-indigo-100 text-indigo-800 text-xs font-medium rounded-full">年度統計 (摺合CNY)</span>
         </div>
         <div class="p-6" id="expenseByCategory">
           <div class="loading-skeleton"></div>
@@ -246,6 +255,23 @@
     function getSymbol(currency) {
       return currencySymbols[currency] || '¥';
     }
+
+    // 資料概覽統計幣別：CNY / TWD / USD（選擇結果存在 localStorage）
+    const DISPLAY_CURRENCY_KEY = 'dashboardDisplayCurrency';
+    const DISPLAY_CURRENCIES = ['CNY', 'TWD', 'USD'];
+    function getDisplayCurrency() {
+      const saved = String(localStorage.getItem(DISPLAY_CURRENCY_KEY) || 'CNY').toUpperCase();
+      return DISPLAY_CURRENCIES.includes(saved) ? saved : 'CNY';
+    }
+    let displayCurrency = getDisplayCurrency();
+    function changeDisplayCurrency(value) {
+      displayCurrency = DISPLAY_CURRENCIES.includes(value) ? value : 'CNY';
+      localStorage.setItem(DISPLAY_CURRENCY_KEY, displayCurrency);
+      const select = document.getElementById('displayCurrency');
+      if (select) select.value = displayCurrency;
+      loadDashboardData();
+    }
+    window.changeDisplayCurrency = changeDisplayCurrency;
 
     // 前端統一本地時區顯示
     async function showSystemTime() {
@@ -301,11 +327,20 @@
 
     async function loadDashboardData(){
       try {
-        const r=await apiFetch('/api/dashboard/stats');
+        const r=await apiFetch('/api/dashboard/stats?currency=' + encodeURIComponent(displayCurrency));
         const d=await r.json();
         if(!d.success) throw new Error(d.message||'載入失敗');
         
         const data=d.data;
+        const cur = data.currency || displayCurrency;
+        const sym = getSymbol(cur);
+
+        const statsSubtitle = document.getElementById('statsSubtitle');
+        if (statsSubtitle) statsSubtitle.textContent = '訂閱費用和活動概覽（統計金額以 ' + cur + ' 計）';
+        const typeBadge = document.getElementById('expenseTypeBadge');
+        if (typeBadge) typeBadge.textContent = '年度統計 (摺合' + cur + ')';
+        const categoryBadge = document.getElementById('expenseCategoryBadge');
+        if (categoryBadge) categoryBadge.textContent = '年度統計 (摺合' + cur + ')';
 
         const schedulerStatusEl = document.getElementById('schedulerStatus');
         if (schedulerStatusEl) {
@@ -367,8 +402,8 @@
 
         document.getElementById('statsGrid').innerHTML=`
           <div class="stat-card">
-            <div class="stat-card-header">月度支出 (CNY)</div>
-            <div class="stat-card-value">¥${data.monthlyExpense.amount.toFixed(2)}</div>
+            <div class="stat-card-header">月度支出 (${cur})</div>
+            <div class="stat-card-value">${sym}${data.monthlyExpense.amount.toFixed(2)}</div>
             <div class="stat-card-subtitle">本月摺合支出</div>
             <div class="stat-card-trend ${data.monthlyExpense.trendDirection}">
               <i class="fas fa-arrow-${data.monthlyExpense.trendDirection==='up'?'up':data.monthlyExpense.trendDirection==='down'?'down':'right'}"></i>
@@ -376,9 +411,9 @@
             </div>
           </div>
           <div class="stat-card">
-            <div class="stat-card-header">年度支出 (CNY)</div>
-            <div class="stat-card-value">¥${data.yearlyExpense.amount.toFixed(2)}</div>
-            <div class="stat-card-subtitle">月均支出: ¥${data.yearlyExpense.monthlyAverage.toFixed(2)}</div>
+            <div class="stat-card-header">年度支出 (${cur})</div>
+            <div class="stat-card-value">${sym}${data.yearlyExpense.amount.toFixed(2)}</div>
+            <div class="stat-card-subtitle">月均支出: ${sym}${data.yearlyExpense.monthlyAverage.toFixed(2)}</div>
           </div>
           <div class="stat-card">
             <div class="stat-card-header">活躍訂閱</div>
@@ -426,7 +461,7 @@
             <div class="ranking-item-header">
               <div class="ranking-item-name">${item.type}</div>
               <div class="ranking-item-value">
-                <span class="ranking-item-amount">¥${item.amount.toFixed(2)}</span>
+                <span class="ranking-item-amount">${sym}${item.amount.toFixed(2)}</span>
                 <span class="ranking-item-percentage">${item.percentage}%</span>
               </div>
             </div>
@@ -443,7 +478,7 @@
             <div class="ranking-item-header">
               <div class="ranking-item-name">${item.category}</div>
               <div class="ranking-item-value">
-                <span class="ranking-item-amount">¥${item.amount.toFixed(2)}</span>
+                <span class="ranking-item-amount">${sym}${item.amount.toFixed(2)}</span>
                 <span class="ranking-item-percentage">${item.percentage}%</span>
               </div>
             </div>
@@ -470,6 +505,8 @@
     window.manualRefresh = manualRefresh;
 
     // 初始化時間顯示和資料載入
+    const currencySelect = document.getElementById('displayCurrency');
+    if (currencySelect) currencySelect.value = displayCurrency;
     showSystemTime();
     loadDashboardData();
 

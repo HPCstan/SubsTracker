@@ -2,21 +2,52 @@ import { MS_PER_DAY, getCurrentTimeInTimezone, getTimezoneDateParts } from './ti
 
 const CATEGORY_SEPARATOR_REGEX = /[\/，,\s]+/;
 
-// 匯率配置 (以 CNY 為基準，當 API 不可用或缺少特定幣種如 TWD 時使用)
+// 匯率配置（語義：1 CNY 可兌換的外幣數量，與 base=CNY 的匯率 API 一致）
+// 當 API 不可用、或 API 缺少特定幣種（如 TWD）時作為兜底
 const FALLBACK_RATES = {
   'CNY': 1,
-  'USD': 6.98,
-  'HKD': 0.90,
-  'TWD': 0.22,
-  'JPY': 0.044,
-  'EUR': 8.16,
-  'GBP': 9.40,
-  'KRW': 0.0048,
-  'TRY': 0.16
+  'USD': 0.14,
+  'HKD': 1.09,
+  'TWD': 4.50,
+  'JPY': 20.5,
+  'EUR': 0.13,
+  'GBP': 0.11,
+  'KRW': 190,
+  'TRY': 4.60
 };
 
+/** 儀表板可切換的統計幣別（預設 CNY，保留舊行為） */
+const DISPLAY_CURRENCIES = ['CNY', 'TWD', 'USD'];
+
+// 匯率來源：優先用涵蓋 TWD 的來源，失敗再退回 ECB 參考匯率
+const RATE_SOURCES = [
+  'https://open.er-api.com/v6/latest/CNY',
+  'https://api.frankfurter.dev/v1/latest?base=CNY'
+];
+
+/**
+ * 抓單一來源的匯率表（base=CNY）。失敗回傳 null，不拋錯。
+ *
+ * @param {string} sourceUrl
+ * @returns {Promise<Record<string, number>|null>}
+ */
+async function fetchRatesFrom(sourceUrl) {
+  try {
+    const response = await fetch(sourceUrl);
+    if (!response.ok) return null;
+    const data = await response.json();
+    const rates = data && data.rates;
+    if (!rates || typeof rates !== 'object') return null;
+    return rates;
+  } catch (error) {
+    console.warn('[匯率] 來源失敗:', sourceUrl, error && error.message ? error.message : error);
+    return null;
+  }
+}
+
 async function getDynamicRates(env) {
-  const CACHE_KEY = 'SYSTEM_EXCHANGE_RATES';
+  // 版本化 key：舊版快取（TWD 方向錯誤）不再沿用
+  const CACHE_KEY = 'SYSTEM_EXCHANGE_RATES_V2';
   const CACHE_TTL = 86400000; // 24小時
 
   try {
@@ -24,24 +55,28 @@ async function getDynamicRates(env) {
     if (cached && cached.ts && (Date.now() - cached.ts < CACHE_TTL)) {
       return cached.rates;
     }
-    const response = await fetch('https://api.frankfurter.dev/v1/latest?base=CNY');
-    if (response.ok) {
-      const data = await response.json();
-      const newRates = {
-        ...FALLBACK_RATES,
-        ...data.rates,
-        'CNY': 1
-      };
 
-      await env.SUBSCRIPTIONS_KV.put(CACHE_KEY, JSON.stringify({
-        ts: Date.now(),
-        rates: newRates
-      }));
-
-      return newRates;
-    } else {
-      console.warn('[匯率] API 請求失敗，使用兜底匯率');
+    let newRates = null;
+    for (const sourceUrl of RATE_SOURCES) {
+      const apiRates = await fetchRatesFrom(sourceUrl);
+      if (!apiRates) continue;
+      const merged = { ...FALLBACK_RATES, ...apiRates, 'CNY': 1 };
+      // 優先採用包含 TWD 的來源（ECB 參考匯率不含 TWD）
+      if (!newRates || merged['TWD']) newRates = merged;
+      if (merged['TWD']) break;
     }
+
+    if (!newRates) {
+      console.warn('[匯率] 所有來源失敗，使用兜底匯率');
+      return FALLBACK_RATES;
+    }
+
+    await env.SUBSCRIPTIONS_KV.put(CACHE_KEY, JSON.stringify({
+      ts: Date.now(),
+      rates: newRates
+    }));
+
+    return newRates;
   } catch (error) {
     console.error('[匯率] 獲取過程出錯:', error);
   }
@@ -57,7 +92,27 @@ function convertToCNY(amount, currency, rates) {
   return amount / rate;
 }
 
-function calculateMonthlyExpense(subscriptions, timezone, rates) {
+/**
+ * 任意幣別換算。rates 為「1 CNY 可兌換的外幣數量」表。
+ *
+ * @param {number} amount
+ * @param {string} fromCurrency
+ * @param {string} toCurrency
+ * @param {Record<string, number>} rates
+ * @returns {number}
+ */
+function convertCurrency(amount, fromCurrency, toCurrency, rates) {
+  if (!amount || amount <= 0) return 0;
+  const from = String(fromCurrency || 'CNY').toUpperCase();
+  const to = String(toCurrency || 'CNY').toUpperCase();
+  if (from === to) return amount;
+  const table = rates || FALLBACK_RATES;
+  const fromRate = table[from] || 1;
+  const toRate = table[to] || 1;
+  return (amount / fromRate) * toRate;
+}
+
+function calculateMonthlyExpense(subscriptions, timezone, rates, targetCurrency = 'CNY') {
   const now = getCurrentTimeInTimezone(timezone);
   const parts = getTimezoneDateParts(now, timezone);
   const currentYear = parts.year;
@@ -101,10 +156,10 @@ function calculateMonthlyExpense(subscriptions, timezone, rates) {
     trend = 100;
     trendDirection = 'up';
   }
-  return { amount, trend: Math.abs(trend), trendDirection };
+  return { amount: convertCurrency(amount, 'CNY', targetCurrency, rates), trend: Math.abs(trend), trendDirection };
 }
 
-function calculateYearlyExpense(subscriptions, timezone, rates) {
+function calculateYearlyExpense(subscriptions, timezone, rates, targetCurrency = 'CNY') {
   const now = getCurrentTimeInTimezone(timezone);
   const parts = getTimezoneDateParts(now, timezone);
   const currentYear = parts.year;
@@ -123,7 +178,10 @@ function calculateYearlyExpense(subscriptions, timezone, rates) {
   });
 
   const monthlyAverage = amount / parts.month;
-  return { amount, monthlyAverage };
+  return {
+    amount: convertCurrency(amount, 'CNY', targetCurrency, rates),
+    monthlyAverage: convertCurrency(monthlyAverage, 'CNY', targetCurrency, rates)
+  };
 }
 
 function getRecentPayments(subscriptions, timezone) {
@@ -174,7 +232,7 @@ function getUpcomingRenewals(subscriptions, timezone) {
     .sort((a, b) => a.daysUntilRenewal - b.daysUntilRenewal);
 }
 
-function getExpenseByType(subscriptions, timezone, rates) {
+function getExpenseByType(subscriptions, timezone, rates, targetCurrency = 'CNY') {
   const now = getCurrentTimeInTimezone(timezone);
   const parts = getTimezoneDateParts(now, timezone);
   const currentYear = parts.year;
@@ -198,13 +256,13 @@ function getExpenseByType(subscriptions, timezone, rates) {
   return Object.entries(typeMap)
     .map(([type, amount]) => ({
       type,
-      amount,
+      amount: convertCurrency(amount, 'CNY', targetCurrency, rates),
       percentage: total > 0 ? Math.round((amount / total) * 100) : 0
     }))
     .sort((a, b) => b.amount - a.amount);
 }
 
-function getExpenseByCategory(subscriptions, timezone, rates) {
+function getExpenseByCategory(subscriptions, timezone, rates, targetCurrency = 'CNY') {
   const now = getCurrentTimeInTimezone(timezone);
   const parts = getTimezoneDateParts(now, timezone);
   const currentYear = parts.year;
@@ -233,7 +291,7 @@ function getExpenseByCategory(subscriptions, timezone, rates) {
   return Object.entries(categoryMap)
     .map(([category, amount]) => ({
       category,
-      amount,
+      amount: convertCurrency(amount, 'CNY', targetCurrency, rates),
       percentage: total > 0 ? Math.round((amount / total) * 100) : 0
     }))
     .sort((a, b) => b.amount - a.amount);
@@ -241,8 +299,10 @@ function getExpenseByCategory(subscriptions, timezone, rates) {
 
 export {
   FALLBACK_RATES,
+  DISPLAY_CURRENCIES,
   getDynamicRates,
   convertToCNY,
+  convertCurrency,
   calculateMonthlyExpense,
   calculateYearlyExpense,
   getRecentPayments,

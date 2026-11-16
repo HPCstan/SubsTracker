@@ -42,7 +42,7 @@ async function handleApiRequest(request, env) {
   }
 
   if (path === '/dashboard/stats' && method === 'GET') {
-    return handleDashboardStats(env, config);
+    return handleDashboardStats(env, config, url);
   }
 
   if (path === '/test-notification' && method === 'POST') {
