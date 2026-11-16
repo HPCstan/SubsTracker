@@ -7,17 +7,78 @@
 
 ---
 
+## 🧩 本機改動紀錄
+
+> 本 fork 相對上游做過三組改動（2026-11）：**排程改用 Durable Object alarm**、**介面簡體轉繁體（台灣用語）**、**預設時區改為 `Asia/Taipei`**。
+> 線上部署：`https://subscription-manager.ogeypt.workers.dev`（Cloudflare Workers Free 方案，Worker 名稱 `subscription-manager`，目前版本 `a6690f4e`）。
+
+### 1. 排程改用 Durable Object alarm（取代 Cron Trigger）
+
+**問題**：Workers Free 方案每個帳號最多 5 個 Cron Trigger。本帳號已用滿（`error code: 10072`），`0 * * * *` 掛不上去，`npm run deploy` 直接失敗。
+
+**解法**：完全不使用 Cron，改用 Durable Object 的 alarm 自我排程，不佔用 Cron 名額。
+
+| 檔案 | 改動 |
+|---|---|
+| `src/services/scheduler-alarm.js`（新增） | `SchedulerAlarm` DO。`fetch()` 為冪等預約：只有 `storage.getAlarm() === null` 時才設定下一個整點（`nextHourStart()`），重複呼叫不會推遲已排定的時間。`alarm()` 執行 `ensureMigrations(env)` + `checkExpiringSubscriptions(env)`，成功寫入 `lastRun`、清掉 `lastError`；失敗把 stack 存進 `lastError`；`finally` 一律續排下一個整點。 |
+| `src/index.js` | `export { SchedulerAlarm }`；新增 `armScheduler(env)`，在請求進來時以 `ctx.waitUntil()` 呼叫 `env.SCHEDULER.get(env.SCHEDULER.idFromName('hourly')).fetch('/arm')` 補掛 alarm（alarm 鏈中斷後可自我修復）。原有 `scheduled` handler 保留，日後升級付費方案可直接掛回 Cron。 |
+| `wrangler.toml` | 移除 `[triggers] crons`；新增 `[[durable_objects.bindings]]`（`name = "SCHEDULER"` → `class_name = "SchedulerAlarm"`）與 `[[migrations]] tag = "v1" new_sqlite_classes = ["SchedulerAlarm"]`（免費方案的 DO 必須使用 SQLite 後端）。 |
+
+**行為差異**：觸發點仍是每個整點（UTC），時區判斷、允許傳送小時、去重等邏輯**完全沿用** `src/services/scheduler.js`，與原本 Cron 一致，只是「誰來觸發」換了。
+
+**驗證**：部署後 `wrangler tail` 出現 `[scheduler-alarm] armed for 2026-11-15T14:00:00.000Z`；KV 每小時產生一筆 `sched_log:<ISO 時間>`；實測 `2026-11-16T00:00:00.243Z` 觸發，內容 `status: ok`、`timezone: Asia/Taipei`、`currentHour: 08`、`inWindow: true`。
+
+### 2. 介面簡體 → 繁體（台灣用語）
+
+- 以 `opencc-js`（`from: 'cn'`, `to: 'twp'`）轉換 `src/**`、`public/**`、`tests/**` 與 `vitest.config.js`，共 78 個 `.js` / `.html`；反覆轉換至冪等收斂（第二輪變動數為 0），並保留原檔 UTF-8 編碼與 BOM 狀態。
+- 轉換是**純字串處理**，不改程式結構。已確認沒有任何中文字串被用在邏輯比較（`===` / `!==` / `includes()` / `startsWith()` / `switch` / `case` 皆無中文字面量），因此行為不受影響。
+- OpenCC 未處理的用語另行手動修正：`賬號 → 帳號`、`賬戶 → 帳戶`、`悉尼 → 雪梨`。
+- 台灣用語對照結果：`服務器 → 伺服器`、`默認 → 預設`、`用戶 → 使用者`、`網絡 → 網路`、`文件 → 檔案`、`數據庫 → 資料庫`、`儀表板 → 儀錶板`。
+- `tests/**` 一併轉換，確保測試斷言的字串與畫面輸出一致。
+
+### 3. 預設時區改為 `Asia/Taipei`
+
+| 檔案 | 改動 |
+|---|---|
+| `src/data/config.js` | `DEFAULT_CONFIG.TIMEZONE: 'Asia/Taipei'`（新安裝／未設定時的預設值） |
+| `src/data/subscriptions.js` | 4 處 fallback 改為 `config.TIMEZONE \|\| 'Asia/Taipei'` |
+| `src/core/time.js` | `extractTimezone()` 新增：`zh-TW` / `zh-HK` / `zh-Hant` → `Asia/Taipei`；`zh-CN` 與 `zh` 仍對應 `Asia/Shanghai` |
+| `src/views/configPage.html` | 靜態選單與動態 `generateTimezoneOptions()` 的推薦分組改為 `🇹🇼 推薦`，`臺北時間` 排第一；`Asia/Shanghai` 移到下方仍可選；`fallbackTimezone`、未知時區提示文字同步改為 `Asia/Taipei` |
+| `src/views/adminPage.html` | `globalTimezone` 的 fallback 改為 `Asia/Taipei` |
+| `src/api/debug.js` | `/debug` 診斷頁的說明範例改為 `TIMEZONE=Asia/Taipei`（台北時間 8 點填 `08`） |
+| KV `config`（線上） | 以 `wrangler kv:key put` 將既有設定中的 `TIMEZONE` 由 `Asia/Shanghai` 改為 `Asia/Taipei`；其餘 41 個欄位（帳號、通知渠道、金鑰等）原樣保留 |
+
+**為何不只改程式預設值**：線上 KV 已存在完整 `config` 物件，`loadConfig()` 會直接讀取該物件，程式預設值不會生效，因此必須同時更新 KV。
+
+### 4. 驗證紀錄
+
+- `npm run lint`（`tsc --noEmit -p jsconfig.json`）：通過，無錯誤。
+- `npm test`：**23 個測試檔 / 250 個測試全數通過**。
+  - ⚠️ 若專案路徑含空白（例如 `D:\ag\...\github install\SubsTracker`），`@cloudflare/vitest-pool-workers` 會解析出錯誤的模組路徑（`No such module ".../file:/..."`），導致 0 個測試被收集、23 個 error。此為環境問題，與程式碼無關；把專案複製到**無空白路徑**再執行 `npm test` 即可正常跑完。
+- 線上實測（登入後逐頁抓取 HTML）：`/login`、`/admin`、`/admin/dashboard`、`/admin/notify-logs`、`/admin/config`、`/debug` 皆為繁體，且無簡體字殘留。
+- Durable Object alarm 實跑：`sched_log` 每小時一筆，`timezone` 已為 `Asia/Taipei`。
+
+### 5. 注意事項
+
+- 改動**之前**產生的 `sched_log` 與通知紀錄仍寫著 `Asia/Shanghai`，屬歷史資料，不影響後續執行。
+- 本 fork 與上游 `wangwangit/SubsTracker` 已大幅分歧（`src/views/**`、`tests/**` 幾乎全改），直接 `git pull` 會產生大量衝突。
+- 本 README 主體仍為簡體中文，**只有本節為繁體**；若要整份轉換請另行處理。
+- 免費方案下 alarm 依賴 Durable Object 自我續排；若 alarm 鏈中斷（例如 DO 被驅逐且未續排），下一個請求進來時 `armScheduler()` 會自動補掛，不會永久停擺。
+
+---
+
 ## 目录
 
-1. [5 分钟上手](#-5-分钟上手)
-2. [部署](#-部署)
-3. [第一次必做配置](#-第一次必做配置)
-4. [日常怎么用](#-日常怎么用)
-5. [通知到底怎么工作](#-通知到底怎么工作重点必读)
-6. [功能一览](#-功能一览)
-7. [常见问题 FAQ](#-常见问题-faq)
-8. [升级 / 开发 / 第三方 API](#-升级--开发--第三方-api)
-9. [安全提醒](#-安全提醒)
+1. [🧩 本機改動紀錄](#-本機改動紀錄)
+2. [5 分钟上手](#-5-分钟上手)
+3. [部署](#-部署)
+4. [第一次必做配置](#-第一次必做配置)
+5. [日常怎么用](#-日常怎么用)
+6. [通知到底怎么工作](#-通知到底怎么工作重点必读)
+7. [功能一览](#-功能一览)
+8. [常见问题 FAQ](#-常见问题-faq)
+9. [升级 / 开发 / 第三方 API](#-升级--开发--第三方-api)
+10. [安全提醒](#-安全提醒)
 
 ---
 
