@@ -64,6 +64,8 @@ async function handleDashboardStats(env, config, url) {
     const rates = await getDynamicRates(env);
     const monthlyExpense = calculateMonthlyExpense(subscriptions, timezone, rates, displayCurrency);
     const yearlyExpense = calculateYearlyExpense(subscriptions, timezone, rates, displayCurrency);
+    /** 預估年支出 = 每月攤平 × 12（相對「實際年度支出」= 今年已付，年繳以全額計） */
+    const projectedYearlyExpense = { amount: monthlyExpense.amount * 12 };
     const recentPayments = getRecentPayments(subscriptions, timezone);
     const upcomingRenewals = getUpcomingRenewals(subscriptions, timezone);
     const expenseByType = getExpenseByType(subscriptions, timezone, rates, displayCurrency);
@@ -82,6 +84,7 @@ async function handleDashboardStats(env, config, url) {
         success: true,
         data: {
           monthlyExpense,
+          projectedYearlyExpense,
           yearlyExpense,
           activeSubscriptions: {
             active: activeSubscriptions.length,

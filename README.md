@@ -10,7 +10,7 @@
 ## 🧩 本機改動紀錄
 
 > 本 fork 相對上游做過四組改動（2026-11）：**排程改用 Durable Object alarm**、**介面簡體轉繁體（台灣用語）**、**預設時區改為 `Asia/Taipei`**、**資料概覽可切換統計幣別（CNY / TWD / USD）**。
-> 線上部署：`https://subscription-manager.ogeypt.workers.dev`（Cloudflare Workers Free 方案，Worker 名稱 `subscription-manager`，目前版本 `889c8203`）。
+> 線上部署：`https://subscription-manager.ogeypt.workers.dev`（Cloudflare Workers Free 方案，Worker 名稱 `subscription-manager`，目前版本 `f88b4f08`）。
 
 ### 1. 排程改用 Durable Object alarm（取代 Cron Trigger）
 
@@ -67,23 +67,31 @@
 | 檔案 | 改動 |
 |---|---|
 | `src/core/currency.js` | ① `FALLBACK_RATES` 改為「1 CNY = X 外幣」（USD 0.14、TWD 4.50、HKD 1.09、JPY 20.5、EUR 0.13、GBP 0.11、KRW 190、TRY 4.60）。② 新增 `DISPLAY_CURRENCIES = ['CNY','TWD','USD']`。③ 新增 `RATE_SOURCES`：`open.er-api.com/v6/latest/CNY`（166 幣，含 TWD）優先、`api.frankfurter.dev/v1/latest?base=CNY`（29 幣，無 TWD）備援；`getDynamicRates()` 逐來源嘗試並**優先採用含 TWD 的來源**，快取 key 升為 `SYSTEM_EXCHANGE_RATES_V2`（舊快取方向錯誤，不再沿用），TTL 由 24 小時縮短為 **6 小時**（貼近即時匯率）。④ 新增 `convertCurrency(amount, from, to, rates)` = `(amount / rates[from]) * rates[to]`。⑤ **月度支出改為「攤平到月」**：新增 `getMonthlyShare()`（月繳 ×1、年繳 ÷12、日租 ×30.4375），`calculateMonthlyExpense()` 不再依賴本月付款紀錄，而是把每筆啟用中訂閱的 `amount` 攤平後加總；趨勢改為與「上月攤平值」比較（只計本月之前已存在的訂閱）。⑥ 其餘 `calculateYearlyExpense` / `getExpenseByType` / `getExpenseByCategory` 仍以**今年實際付款**為基礎，只增加 `targetCurrency = 'CNY'` 參數做換算。 |
-| `src/api/handlers/dashboard.js` | `handleDashboardStats(env, config, url)` 讀 `?currency=`，用 `DISPLAY_CURRENCIES` 驗證（非法值回退 `CNY`），傳入四個聚合函式，回應新增 `data.currency`。 |
+| `src/api/handlers/dashboard.js` | `handleDashboardStats(env, config, url)` 讀 `?currency=`，用 `DISPLAY_CURRENCIES` 驗證（非法值回退 `CNY`），傳入四個聚合函式，回應新增 `data.currency` 與 `data.projectedYearlyExpense`（= `monthlyExpense.amount × 12`）。 |
 | `src/api/router.js` | `/dashboard/stats` 將 `url` 傳入 handler。 |
-| `src/views/dashboardPage.html` | 「資料概覽」列新增 `#displayCurrency` 下拉（人民幣／新台幣／美金），選擇存 `localStorage['dashboardDisplayCurrency']`；`loadDashboardData()` 改打 `/api/dashboard/stats?currency=...`；副標、兩張統計卡的幣別文字與 `¥` 符號、兩個排行徽章（`#expenseTypeBadge` / `#expenseCategoryBadge`）、排行金額全部改為動態（沿用既有 `getSymbol()`）。月度卡副標改為「每月攤平（年繳 ÷12）」，年度卡副標改為「今年已付 · 平均每月 NT$X」。 |
+| `src/views/dashboardPage.html` | 「資料概覽」列新增 `#displayCurrency` 下拉（人民幣／新台幣／美金），選擇存 `localStorage['dashboardDisplayCurrency']`；`loadDashboardData()` 改打 `/api/dashboard/stats?currency=...`；副標、四張統計卡的幣別文字與 `¥` 符號、兩個排行徽章（`#expenseTypeBadge` / `#expenseCategoryBadge`）、排行金額全部改為動態（沿用既有 `getSymbol()`）。統計卡由 3 張改為 4 張（`md:grid-cols-2 xl:grid-cols-4`）：**月度支出**（副標「每月攤平（年繳 ÷12）」）、**預估年支出**（副標「每月攤平 × 12」）、**實際年度支出**（副標「今年已付 · 平均每月 X」）、活躍訂閱；排行徽章改為「實際年度 (摺合XXX)」。 |
 | `tests/core/currency-display.test.js`（新增） | 16 個測試：`convertCurrency` 同幣別／TWD→CNY／CNY→USD／往返不失真／0 與負數、`FALLBACK_RATES` 方向（並斷言 NT$50 不會被放大）、四個聚合函式的 `targetCurrency` 行為，以及攤平規則（年繳 650 → 650/12、停用訂閱不計、月繳＋年繳＋美金混合加總、本月新增訂閱使趨勢往上）。既有 `convertToCNY` 語義未動（`auth-currency.test.js` 仍通過）。 |
 
-**月度支出的語義**：`月度支出 = Σ(每個啟用中訂閱的 amount 攤平到月)`，因此**月初還沒扣款也不會低估**；`年度支出` 仍是「今年已實際付款總和（年繳以全額計）」，兩者刻意不同，副標已明示。
+**三種支出口徑（同時顯示，互不覆蓋）**：
+
+| 統計卡 | 計算方式 | 用途 |
+|---|---|---|
+| 月度支出 | `Σ(每個啟用中訂閱的 amount 攤平到月)`，年繳 ÷12、日租 ×30.4375 | 現在每月固定負擔（月初還沒扣款也不會低估） |
+| 預估年支出 | 月度支出 × 12 | 維持目前訂閱組合一年的總花費 |
+| 實際年度支出 | 今年已實際付款總和（年繳以全額計） | 今年真的付出去的錢（與右側「按型別／按分類」排行同口徑） |
+
+`實際年度支出` 與 `預估年支出` 會有落差，是因為今年才建檔、多數訂閱在 11 月才開始，以及年繳在年初一次付清；三者都在卡片副標寫明算法。
 
 **驗證**（線上實測，`/api/dashboard/stats`，2026-11-17）：
 
-| 請求 | 回傳 `currency` | 月度支出（攤平） | 年度支出（今年已付） |
-|---|---|---|---|
-| `?currency=CNY`（或省略） | `CNY` | 1,104.95 | 1,319.45 |
-| `?currency=TWD` | `TWD` | 5,448.48 | 6,506.17 |
-| `?currency=USD` | `USD` | 165.45 | 197.57 |
-| `?currency=XXX` | `CNY`（回退） | 1,104.95 | 1,319.45 |
+| 請求 | 回傳 `currency` | 月度支出（攤平） | 預估年支出（×12） | 實際年度支出（今年已付） |
+|---|---|---|---|---|
+| `?currency=CNY`（或省略） | `CNY` | 1,104.97 | 13,259.63 | 1,319.48 |
+| `?currency=TWD` | `TWD` | 5,448.57 | 65,382.79 | 6,506.31 |
+| `?currency=USD` | `USD` | 165.43 | 1,985.21 | 197.55 |
+| `?currency=XXX` | `CNY`（回退） | 1,104.97 | 13,259.63 | 1,319.48 |
 
-三者互為同一筆金額：1,104.95 CNY × 4.930966 ≈ 5,448.48 TWD ≈ 165.45 USD（×32.935），與即時匯率一致。`/admin/dashboard` HTML 已含下拉與動態符號模板，無硬編 `¥` 金額。部署版本 `d01abd85-69d9-41e4-903e-982c2cddc7de`。
+三者互為同一筆金額：1,104.97 CNY × 4.930966 ≈ 5,448.57 TWD ≈ 165.43 USD（×32.935），與即時匯率一致（匯率每 6 小時更新，數字會有小數點後的微幅變動）。`/admin/dashboard` HTML 已含下拉、四張統計卡與動態符號模板，無硬編 `¥` 金額。部署版本 `f88b4f08-f77a-4886-bc21-b35da73c8b98`。
 
 ### 6. 注意事項
 

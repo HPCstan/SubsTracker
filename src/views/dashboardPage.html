@@ -163,7 +163,8 @@
       </div>
     </div>
 
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6" id="statsGrid">
+    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 mb-6" id="statsGrid">
+      <div class="loading-skeleton"></div>
       <div class="loading-skeleton"></div>
       <div class="loading-skeleton"></div>
       <div class="loading-skeleton"></div>
@@ -214,7 +215,7 @@
             <i class="fas fa-chart-bar text-purple-500"></i>
             <h3 class="text-lg font-medium text-gray-900">按型別支出排行</h3>
           </div>
-          <span id="expenseTypeBadge" class="px-3 py-1 bg-indigo-100 text-indigo-800 text-xs font-medium rounded-full">年度統計 (摺合CNY)</span>
+          <span id="expenseTypeBadge" class="px-3 py-1 bg-indigo-100 text-indigo-800 text-xs font-medium rounded-full">實際年度 (摺合CNY)</span>
         </div>
         <div class="p-6" id="expenseByType">
           <div class="loading-skeleton"></div>
@@ -227,7 +228,7 @@
             <i class="fas fa-folder text-green-500"></i>
             <h3 class="text-lg font-medium text-gray-900">按分類支出統計</h3>
           </div>
-          <span id="expenseCategoryBadge" class="px-3 py-1 bg-indigo-100 text-indigo-800 text-xs font-medium rounded-full">年度統計 (摺合CNY)</span>
+          <span id="expenseCategoryBadge" class="px-3 py-1 bg-indigo-100 text-indigo-800 text-xs font-medium rounded-full">實際年度 (摺合CNY)</span>
         </div>
         <div class="p-6" id="expenseByCategory">
           <div class="loading-skeleton"></div>
@@ -338,9 +339,9 @@
         const statsSubtitle = document.getElementById('statsSubtitle');
         if (statsSubtitle) statsSubtitle.textContent = '訂閱費用和活動概覽（統計金額以 ' + cur + ' 計）';
         const typeBadge = document.getElementById('expenseTypeBadge');
-        if (typeBadge) typeBadge.textContent = '年度統計 (摺合' + cur + ')';
+        if (typeBadge) typeBadge.textContent = '實際年度 (摺合' + cur + ')';
         const categoryBadge = document.getElementById('expenseCategoryBadge');
-        if (categoryBadge) categoryBadge.textContent = '年度統計 (摺合' + cur + ')';
+        if (categoryBadge) categoryBadge.textContent = '實際年度 (摺合' + cur + ')';
 
         const schedulerStatusEl = document.getElementById('schedulerStatus');
         if (schedulerStatusEl) {
@@ -411,7 +412,12 @@
             </div>
           </div>
           <div class="stat-card">
-            <div class="stat-card-header">年度支出 (${cur})</div>
+            <div class="stat-card-header">預估年支出 (${cur})</div>
+            <div class="stat-card-value">${sym}${data.projectedYearlyExpense.amount.toFixed(2)}</div>
+            <div class="stat-card-subtitle">每月攤平 × 12</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card-header">實際年度支出 (${cur})</div>
             <div class="stat-card-value">${sym}${data.yearlyExpense.amount.toFixed(2)}</div>
             <div class="stat-card-subtitle">今年已付 · 平均每月 ${sym}${data.yearlyExpense.monthlyAverage.toFixed(2)}</div>
           </div>
