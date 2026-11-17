@@ -48,7 +48,7 @@ async function fetchRatesFrom(sourceUrl) {
 async function getDynamicRates(env) {
   // 版本化 key：舊版快取（TWD 方向錯誤）不再沿用
   const CACHE_KEY = 'SYSTEM_EXCHANGE_RATES_V2';
-  const CACHE_TTL = 86400000; // 24小時
+  const CACHE_TTL = 21600000; // 6小時（盡量貼近即時匯率）
 
   try {
     const cached = await env.SUBSCRIPTIONS_KV.get(CACHE_KEY, { type: 'json' });
@@ -112,6 +112,25 @@ function convertCurrency(amount, fromCurrency, toCurrency, rates) {
   return (amount / fromRate) * toRate;
 }
 
+/**
+ * 週期換算係數：把「一個週期的金額」折算成「每月金額」。
+ * 1 個月 → ×1、1 年 → ÷12、1 天 → ×30.4375。
+ *
+ * @param {{periodValue?: number, periodUnit?: string}} sub
+ * @returns {number}
+ */
+function getMonthlyShare(sub) {
+  const value = Number(sub.periodValue) > 0 ? Number(sub.periodValue) : 1;
+  const unit = String(sub.periodUnit || 'month');
+  if (unit === 'day') return 30.4375 / value;
+  if (unit === 'year') return 1 / (value * 12);
+  return 1 / value;
+}
+
+/**
+ * 月度支出 = 所有啟用中訂閱「攤平到月」的總額（年繳 ÷12、日租 ×30.4375）。
+ * 不依賴本月是否已產生付款紀錄，避免月初尚未扣款時低估。
+ */
 function calculateMonthlyExpense(subscriptions, timezone, rates, targetCurrency = 'CNY') {
   const now = getCurrentTimeInTimezone(timezone);
   const parts = getTimezoneDateParts(now, timezone);
@@ -119,31 +138,21 @@ function calculateMonthlyExpense(subscriptions, timezone, rates, targetCurrency 
   const currentMonth = parts.month;
 
   let amount = 0;
-  subscriptions.forEach(sub => {
-    const paymentHistory = sub.paymentHistory || [];
-    paymentHistory.forEach(payment => {
-      if (!payment.amount || payment.amount <= 0) return;
-      const paymentDate = new Date(payment.date);
-      const paymentParts = getTimezoneDateParts(paymentDate, timezone);
-      if (paymentParts.year === currentYear && paymentParts.month === currentMonth) {
-        amount += convertToCNY(payment.amount, sub.currency, rates);
-      }
-    });
-  });
-
-  const lastMonth = currentMonth === 1 ? 12 : currentMonth - 1;
-  const lastMonthYear = currentMonth === 1 ? currentYear - 1 : currentYear;
   let lastMonthAmount = 0;
+
   subscriptions.forEach(sub => {
-    const paymentHistory = sub.paymentHistory || [];
-    paymentHistory.forEach(payment => {
-      if (!payment.amount || payment.amount <= 0) return;
-      const paymentDate = new Date(payment.date);
-      const paymentParts = getTimezoneDateParts(paymentDate, timezone);
-      if (paymentParts.year === lastMonthYear && paymentParts.month === lastMonth) {
-        lastMonthAmount += convertToCNY(payment.amount, sub.currency, rates);
-      }
-    });
+    if (!sub.isActive) return;
+    if (!sub.amount || sub.amount <= 0) return;
+
+    const monthlyCNY = convertToCNY(sub.amount, sub.currency, rates) * getMonthlyShare(sub);
+    amount += monthlyCNY;
+
+    // 趨勢基準：只計「本月之前就已存在」的訂閱攤平值
+    const startParts = sub.startDate ? getTimezoneDateParts(new Date(sub.startDate), timezone) : null;
+    const startedBeforeThisMonth = !startParts ||
+      startParts.year < currentYear ||
+      (startParts.year === currentYear && startParts.month < currentMonth);
+    if (startedBeforeThisMonth) lastMonthAmount += monthlyCNY;
   });
 
   let trend = 0;

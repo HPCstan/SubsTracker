@@ -404,7 +404,7 @@
           <div class="stat-card">
             <div class="stat-card-header">月度支出 (${cur})</div>
             <div class="stat-card-value">${sym}${data.monthlyExpense.amount.toFixed(2)}</div>
-            <div class="stat-card-subtitle">本月摺合支出</div>
+            <div class="stat-card-subtitle">每月攤平（年繳 ÷12）</div>
             <div class="stat-card-trend ${data.monthlyExpense.trendDirection}">
               <i class="fas fa-arrow-${data.monthlyExpense.trendDirection==='up'?'up':data.monthlyExpense.trendDirection==='down'?'down':'right'}"></i>
               ${data.monthlyExpense.trend}%
@@ -413,7 +413,7 @@
           <div class="stat-card">
             <div class="stat-card-header">年度支出 (${cur})</div>
             <div class="stat-card-value">${sym}${data.yearlyExpense.amount.toFixed(2)}</div>
-            <div class="stat-card-subtitle">月均支出: ${sym}${data.yearlyExpense.monthlyAverage.toFixed(2)}</div>
+            <div class="stat-card-subtitle">今年已付 · 平均每月 ${sym}${data.yearlyExpense.monthlyAverage.toFixed(2)}</div>
           </div>
           <div class="stat-card">
             <div class="stat-card-header">活躍訂閱</div>

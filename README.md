@@ -53,7 +53,7 @@
 ### 4. 驗證紀錄
 
 - `npm run lint`（`tsc --noEmit -p jsconfig.json`）：通過，無錯誤。
-- `npm test`：**24 個測試檔 / 262 個測試全數通過**。
+- `npm test`：**24 個測試檔 / 266 個測試全數通過**。
   - ⚠️ 若專案路徑含空白（例如 `D:\ag\...\github install\SubsTracker`），`@cloudflare/vitest-pool-workers` 會解析出錯誤的模組路徑（`No such module ".../file:/..."`），導致 0 個測試被收集、23 個 error。此為環境問題，與程式碼無關；把專案複製到**無空白路徑**再執行 `npm test` 即可正常跑完。
 - 線上實測（登入後逐頁抓取 HTML）：`/login`、`/admin`、`/admin/dashboard`、`/admin/notify-logs`、`/admin/config`、`/debug` 皆為繁體，且無簡體字殘留。
 - Durable Object alarm 實跑：`sched_log` 每小時一筆，`timezone` 已為 `Asia/Taipei`。
@@ -66,22 +66,24 @@
 
 | 檔案 | 改動 |
 |---|---|
-| `src/core/currency.js` | ① `FALLBACK_RATES` 改為「1 CNY = X 外幣」（USD 0.14、TWD 4.50、HKD 1.09、JPY 20.5、EUR 0.13、GBP 0.11、KRW 190、TRY 4.60）。② 新增 `DISPLAY_CURRENCIES = ['CNY','TWD','USD']`。③ 新增 `RATE_SOURCES`：`open.er-api.com/v6/latest/CNY`（166 幣，含 TWD）優先、`api.frankfurter.dev/v1/latest?base=CNY`（29 幣，無 TWD）備援；`getDynamicRates()` 逐來源嘗試並**優先採用含 TWD 的來源**，快取 key 升為 `SYSTEM_EXCHANGE_RATES_V2`（舊快取方向錯誤，不再沿用）。④ 新增 `convertCurrency(amount, from, to, rates)` = `(amount / rates[from]) * rates[to]`。⑤ `calculateMonthlyExpense` / `calculateYearlyExpense` / `getExpenseByType` / `getExpenseByCategory` 增加 `targetCurrency = 'CNY'` 參數，回傳前換算（百分比仍以 CNY 佔比計算，不受影響）。 |
+| `src/core/currency.js` | ① `FALLBACK_RATES` 改為「1 CNY = X 外幣」（USD 0.14、TWD 4.50、HKD 1.09、JPY 20.5、EUR 0.13、GBP 0.11、KRW 190、TRY 4.60）。② 新增 `DISPLAY_CURRENCIES = ['CNY','TWD','USD']`。③ 新增 `RATE_SOURCES`：`open.er-api.com/v6/latest/CNY`（166 幣，含 TWD）優先、`api.frankfurter.dev/v1/latest?base=CNY`（29 幣，無 TWD）備援；`getDynamicRates()` 逐來源嘗試並**優先採用含 TWD 的來源**，快取 key 升為 `SYSTEM_EXCHANGE_RATES_V2`（舊快取方向錯誤，不再沿用），TTL 由 24 小時縮短為 **6 小時**（貼近即時匯率）。④ 新增 `convertCurrency(amount, from, to, rates)` = `(amount / rates[from]) * rates[to]`。⑤ **月度支出改為「攤平到月」**：新增 `getMonthlyShare()`（月繳 ×1、年繳 ÷12、日租 ×30.4375），`calculateMonthlyExpense()` 不再依賴本月付款紀錄，而是把每筆啟用中訂閱的 `amount` 攤平後加總；趨勢改為與「上月攤平值」比較（只計本月之前已存在的訂閱）。⑥ 其餘 `calculateYearlyExpense` / `getExpenseByType` / `getExpenseByCategory` 仍以**今年實際付款**為基礎，只增加 `targetCurrency = 'CNY'` 參數做換算。 |
 | `src/api/handlers/dashboard.js` | `handleDashboardStats(env, config, url)` 讀 `?currency=`，用 `DISPLAY_CURRENCIES` 驗證（非法值回退 `CNY`），傳入四個聚合函式，回應新增 `data.currency`。 |
 | `src/api/router.js` | `/dashboard/stats` 將 `url` 傳入 handler。 |
-| `src/views/dashboardPage.html` | 「資料概覽」列新增 `#displayCurrency` 下拉（人民幣／新台幣／美金），選擇存 `localStorage['dashboardDisplayCurrency']`；`loadDashboardData()` 改打 `/api/dashboard/stats?currency=...`；副標、兩張統計卡的幣別文字與 `¥` 符號、兩個排行徽章（`#expenseTypeBadge` / `#expenseCategoryBadge`）、排行金額全部改為動態（沿用既有 `getSymbol()`）。 |
-| `tests/core/currency-display.test.js`（新增） | 12 個測試：`convertCurrency` 同幣別／TWD→CNY／CNY→USD／往返不失真／0 與負數、`FALLBACK_RATES` 方向（並斷言 NT$50 不會被放大）、四個聚合函式的 `targetCurrency` 行為。既有 `convertToCNY` 語義未動（`auth-currency.test.js` 仍通過）。 |
+| `src/views/dashboardPage.html` | 「資料概覽」列新增 `#displayCurrency` 下拉（人民幣／新台幣／美金），選擇存 `localStorage['dashboardDisplayCurrency']`；`loadDashboardData()` 改打 `/api/dashboard/stats?currency=...`；副標、兩張統計卡的幣別文字與 `¥` 符號、兩個排行徽章（`#expenseTypeBadge` / `#expenseCategoryBadge`）、排行金額全部改為動態（沿用既有 `getSymbol()`）。月度卡副標改為「每月攤平（年繳 ÷12）」，年度卡副標改為「今年已付 · 平均每月 NT$X」。 |
+| `tests/core/currency-display.test.js`（新增） | 16 個測試：`convertCurrency` 同幣別／TWD→CNY／CNY→USD／往返不失真／0 與負數、`FALLBACK_RATES` 方向（並斷言 NT$50 不會被放大）、四個聚合函式的 `targetCurrency` 行為，以及攤平規則（年繳 650 → 650/12、停用訂閱不計、月繳＋年繳＋美金混合加總、本月新增訂閱使趨勢往上）。既有 `convertToCNY` 語義未動（`auth-currency.test.js` 仍通過）。 |
 
-**驗證**（線上實測，`/api/dashboard/stats`）：
+**月度支出的語義**：`月度支出 = Σ(每個啟用中訂閱的 amount 攤平到月)`，因此**月初還沒扣款也不會低估**；`年度支出` 仍是「今年已實際付款總和（年繳以全額計）」，兩者刻意不同，副標已明示。
 
-| 請求 | 回傳 `currency` | 月度支出 | 年度支出 |
+**驗證**（線上實測，`/api/dashboard/stats`，2026-11-17）：
+
+| 請求 | 回傳 `currency` | 月度支出（攤平） | 年度支出（今年已付） |
 |---|---|---|---|
-| `?currency=CNY`（或省略） | `CNY` | 941.51 | 1,319.45 |
-| `?currency=TWD` | `TWD` | 4,642.55 | 6,506.17 |
-| `?currency=USD` | `USD` | 140.98 | 197.57 |
-| `?currency=XXX` | `CNY`（回退） | 941.51 | 1,319.45 |
+| `?currency=CNY`（或省略） | `CNY` | 1,104.95 | 1,319.45 |
+| `?currency=TWD` | `TWD` | 5,448.48 | 6,506.17 |
+| `?currency=USD` | `USD` | 165.45 | 197.57 |
+| `?currency=XXX` | `CNY`（回退） | 1,104.95 | 1,319.45 |
 
-CNY→TWD 約 4.93、CNY→USD 約 0.1497，與即時匯率一致；`/admin/dashboard` HTML 已含下拉與動態符號模板，無硬編 `¥` 金額。部署版本 `889c8203-a499-4d4a-add5-4d574f7543b4`。
+三者互為同一筆金額：1,104.95 CNY × 4.930966 ≈ 5,448.48 TWD ≈ 165.45 USD（×32.935），與即時匯率一致。`/admin/dashboard` HTML 已含下拉與動態符號模板，無硬編 `¥` 金額。部署版本 `d01abd85-69d9-41e4-903e-982c2cddc7de`。
 
 ### 6. 注意事項
 
