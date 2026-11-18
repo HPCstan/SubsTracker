@@ -9,8 +9,8 @@
 
 ## 🧩 本機改動紀錄
 
-> 本 fork 相對上游做過四組改動（2026-11）：**排程改用 Durable Object alarm**、**介面簡體轉繁體（台灣用語）**、**預設時區改為 `Asia/Taipei`**、**資料概覽可切換統計幣別（CNY / TWD / USD）**。
-> 線上部署：`https://subscription-manager.ogeypt.workers.dev`（Cloudflare Workers Free 方案，Worker 名稱 `subscription-manager`，目前版本 `f88b4f08`）。
+> 本 fork 相對上游做過五組改動（2026-11）：**排程改用 Durable Object alarm**、**介面簡體轉繁體（台灣用語）**、**預設時區改為 `Asia/Taipei`**、**資料概覽可切換統計幣別並拆分月度／預估年／實際年度支出**、**修正儀表板「任務歷史」欄位讀錯與時區標籤**。
+> 線上部署：`https://subscription-manager.ogeypt.workers.dev`（Cloudflare Workers Free 方案，Worker 名稱 `subscription-manager`，目前版本 `abb94187`）。
 
 ### 1. 排程改用 Durable Object alarm（取代 Cron Trigger）
 
@@ -93,7 +93,37 @@
 
 三者互為同一筆金額：1,104.97 CNY × 4.930966 ≈ 5,448.57 TWD ≈ 165.43 USD（×32.935），與即時匯率一致（匯率每 6 小時更新，數字會有小數點後的微幅變動）。`/admin/dashboard` HTML 已含下拉、四張統計卡與動態符號模板，無硬編 `¥` 金額。部署版本 `f88b4f08-f77a-4886-bc21-b35da73c8b98`。
 
-### 6. 注意事項
+### 6. 修正儀表板「自動提醒任務歷史」顯示（未知時間／永遠未傳送）
+
+**症狀**：儀表板下方「自動提醒任務歷史（最近10次）」每一筆都顯示「**未知時間 · 未傳送**」，即使該次真的發送成功也一樣；上方「自動提醒任務狀態」卡卻正常。
+
+**原因**：`data.schedulerStatusHistory` 是 `scheduler-logs.repo.getRecent()` 的**原始紀錄**，欄位為 `startedAt` / `finishedAt` / `checkedCount` / `matchedCount` / `sentCount` / `reason`；`handler` 只把這些欄位**映射成** `lastRunAt` / `sent` 放進 `schedulerStatus`（摘要物件）。前端歷史列表卻直接讀摘要物件的欄位名，因此：
+
+- `item.lastRunAt` → `undefined` → 時間永遠「未知時間」
+- `item.sent` → `undefined` → 狀態永遠「未傳送」（連成功發送也會顯示未傳送）
+
+**改動**（`src/views/dashboardPage.html`，共 3 處）：
+
+| 位置 | 改動 |
+|---|---|
+| 任務歷史（約 396 行） | 時間改讀 `item.startedAt \|\| item.finishedAt`；狀態改讀 `(item.sentCount \|\| 0) > 0`；第二行改為「檢查 X · 命中 Y · 送出 Z」+ 原因，資訊與排程日誌一致 |
+| 狀態卡時區標籤（約 372 行） | `當前小時 / 配置時段（UTC）` 改為 `（${status.timezone \|\| 'UTC'}）` —— `currentHour` 原本就是按使用者時區計算，標 UTC 會誤導（台北 01:00 會被讀成 UTC 01:00） |
+| 時間格式 locale（狀態卡與歷史） | `toLocaleString('zh-CN')` → `toLocaleString('zh-TW')`，與全站繁體一致 |
+
+**為什麼「本次未傳送」在這些紀錄裡是正確的**：提醒規則是**精確日**設計（「到期前 N 天」只在剩餘天數**正好等於 N** 那天發）。2026-11-19 那次檢查 8 條、命中 0 條，因為沒有任何訂閱當天剛好落在自己的提醒日；下一次實際發送是 **2026-11-24 01:00（台北）**，opencode 到期前 1 天。
+
+**驗證**（部署 `abb94187`，線上 HTML 與 API 實測）：
+
+| 檢查項 | 結果 |
+|---|---|
+| 使用 `item.startedAt \|\| item.finishedAt` | ✅ |
+| 使用 `(item.sentCount \|\| 0) > 0` | ✅ |
+| 顯示「檢查 · 命中 · 送出」 | ✅ |
+| 時區標籤改為動態（`Asia/Taipei`） | ✅ |
+| 舊的 `item.lastRunAt` 殘留 | 無 |
+| 第一筆紀錄實際欄位 | `startedAt=2026-11-18T17:00:00.236Z`、`sentCount=0`、`matchedCount=0`、`checkedCount=8` |
+
+### 7. 注意事項
 
 - 改動**之前**產生的 `sched_log` 與通知紀錄仍寫著 `Asia/Shanghai`，屬歷史資料，不影響後續執行。
 - 本 fork 與上游 `wangwangit/SubsTracker` 已大幅分歧（`src/views/**`、`tests/**` 幾乎全改），直接 `git pull` 會產生大量衝突。

@@ -350,7 +350,7 @@
             schedulerStatusEl.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🕐</div><div class="empty-state-text">暫無定時任務執行記錄（等待下一次 Cron）</div></div>';
           } else {
             const sendResult = status.sendResult || {};
-            const runAt = status.lastRunAt ? new Date(status.lastRunAt).toLocaleString('zh-CN') : '未知';
+            const runAt = status.lastRunAt ? new Date(status.lastRunAt).toLocaleString('zh-TW') : '未知';
             const configuredHours = Array.isArray(status.configuredHours) && status.configuredHours.length > 0
               ? status.configuredHours.join(', ')
               : '全部時段';
@@ -369,7 +369,7 @@
                   <div class="mt-1">${sentBadge}</div>
                 </div>
                 <div class="bg-gray-50 rounded-md p-3">
-                  <div class="text-gray-500">當前小時 / 配置時段（UTC）</div>
+                  <div class="text-gray-500">當前小時 / 配置時段（${status.timezone || 'UTC'}）</div>
                   <div class="text-gray-900 font-medium mt-1">${status.currentHour || '--'} / ${configuredHours}</div>
                 </div>
                 <div class="bg-gray-50 rounded-md p-3">
@@ -393,10 +393,12 @@
             schedulerHistoryEl.innerHTML = '<div class="text-sm text-gray-500">暫無歷史記錄</div>';
           } else {
             schedulerHistoryEl.innerHTML = schedulerHistory.slice(0, 10).map(item => {
-              const when = item.lastRunAt ? new Date(item.lastRunAt).toLocaleString('zh-CN') : '未知時間';
-              const sent = item.sent ? '已傳送' : '未傳送';
+              const runAt = item.startedAt || item.finishedAt;
+              const when = runAt ? new Date(runAt).toLocaleString('zh-TW') : '未知時間';
+              const sent = (item.sentCount || 0) > 0 ? '已傳送' : '未傳送';
+              const counts = `檢查 ${item.checkedCount || 0} · 命中 ${item.matchedCount || 0} · 送出 ${item.sentCount || 0}`;
               const reason = item.reason || '-';
-              return `<div class="py-2 border-b border-gray-100 last:border-b-0 text-sm"><div class="font-medium text-gray-800">${when} · ${sent}</div><div class="text-xs text-gray-500 mt-1">${reason}</div></div>`;
+              return `<div class="py-2 border-b border-gray-100 last:border-b-0 text-sm"><div class="font-medium text-gray-800">${when} · ${sent}</div><div class="text-xs text-gray-500 mt-1">${counts}　${reason}</div></div>`;
             }).join('');
           }
         }
